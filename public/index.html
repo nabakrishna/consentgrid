@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ConsentGrid — Sign in</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">ConsentGrid <small>DPDP Consent Artifact Platform</small></div>
+    <nav><a href="/verify">Verify a receipt</a></nav>
+  </div>
+
+  <div class="center">
+    <div class="card auth-card">
+      <div class="tabs">
+        <button id="tab-login" class="active">Sign in</button>
+        <button id="tab-signup">Create org</button>
+      </div>
+
+      <!-- Login -->
+      <form id="login-form">
+        <label>Email</label>
+        <input id="login-email" type="email" autocomplete="username" required />
+        <label>Password</label>
+        <input id="login-password" type="password" autocomplete="current-password" required />
+        <div class="spacer"></div>
+        <button class="btn" type="submit" style="width:100%">Sign in</button>
+        <p class="hint" style="margin-top:12px">Your account manages notices, API keys, the consent log and webhooks.</p>
+      </form>
+
+      <!-- Signup -->
+      <form id="signup-form" class="hidden">
+        <label>Organization name (Data Fiduciary)</label>
+        <input id="signup-name" required />
+        <label>Email</label>
+        <input id="signup-email" type="email" autocomplete="username" required />
+        <label>Password</label>
+        <input id="signup-password" type="password" autocomplete="new-password" minlength="8" required />
+        <div class="spacer"></div>
+        <button class="btn" type="submit" style="width:100%">Create organization</button>
+        <p class="hint" style="margin-top:12px">You'll receive an initial API key shown once — store it in your secret manager, never in client code.</p>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+  <script>
+    CG.initAuthPage();
+  </script>
+</body>
+</html>

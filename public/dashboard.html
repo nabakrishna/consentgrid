@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ConsentGrid — Dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">ConsentGrid <small>Dashboard</small></div>
+    <nav>
+      <a href="#" data-view="notices" class="active">Notices</a>
+      <a href="#" data-view="log">Consent log</a>
+      <a href="#" data-view="keys">API keys</a>
+      <a href="#" data-view="webhooks">Webhooks</a>
+      <a href="#" data-view="integrity">Integrity</a>
+      <a href="#" id="signout">Sign out</a>
+    </nav>
+  </div>
+
+  <div class="wrap">
+
+    <!-- ── Notices ─────────────────────────────────────────── -->
+    <section data-panel="notices">
+      <div class="grid cols-2">
+        <div class="card">
+          <h2>1 · Create a notice template</h2>
+          <p class="sub">A template groups the purposes you ask consent for. Purposes render <b>unticked</b> in the widget.</p>
+          <form id="tpl-form">
+            <label>Template name</label>
+            <input id="tpl-name" placeholder="Signup consent" required />
+            <label>Purpose IDs (comma-separated)</label>
+            <input id="tpl-purposes" placeholder="marketing, analytics, personalization" required />
+            <div class="spacer"></div>
+            <button class="btn" type="submit">Create template</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>2 · Add a version (legal text)</h2>
+          <p class="sub">The legal boilerplate is hashed; template + variable payload hashes are bound into every artifact.</p>
+          <form id="ver-form">
+            <label>Template</label>
+            <select id="ver-template"></select>
+            <label>Template boilerplate (legal text)</label>
+            <textarea id="ver-boilerplate" placeholder="The legally-reviewed notice text…" required></textarea>
+            <label>Variable payload (JSON, optional)</label>
+            <input id="ver-payload" placeholder='{"retention_days":365}' />
+            <div class="spacer"></div>
+            <button class="btn" type="submit">Create version</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="card">
+        <h2>3 · Add & approve localized notices</h2>
+        <p class="sub">Consent is only recordable in a language whose notice is <b>approved</b> (honest fallback). RTL is set automatically for Urdu/Kashmiri/Sindhi.</p>
+        <form id="loc-form">
+          <div class="row">
+            <div>
+              <label>Version</label>
+              <select id="loc-version"></select>
+            </div>
+            <div>
+              <label>Locale</label>
+              <select id="loc-locale"></select>
+            </div>
+          </div>
+          <label>Title</label>
+          <input id="loc-title" placeholder="Privacy notice" required />
+          <label>Body HTML (approved, sanitized content)</label>
+          <textarea id="loc-body" placeholder="<p>We process your data for…</p>" required></textarea>
+          <label class="inline-actions" style="align-items:center;gap:8px">
+            <input type="checkbox" id="loc-auto" style="width:auto" /> <span>Machine-assisted translation (flagged in widget)</span>
+          </label>
+          <div class="spacer"></div>
+          <button class="btn" type="submit">Add locale</button>
+        </form>
+
+        <div class="spacer"></div>
+        <h3 style="font-size:14px;margin:0 0 8px">Locales for selected version</h3>
+        <table id="loc-table"><thead><tr><th>Locale</th><th>Title</th><th>Dir</th><th>State</th><th>Auto</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+
+    <!-- ── Consent log ─────────────────────────────────────── -->
+    <section data-panel="log" class="hidden">
+      <div class="card">
+        <h2>Consent log</h2>
+        <p class="sub">Every artifact is signed and hash-chained. No raw PII is stored — only the keyed <code>id_hash</code>.</p>
+        <div class="row">
+          <div>
+            <label>Action</label>
+            <select id="log-action"><option value="">Any</option><option>GRANT</option><option>WITHDRAW</option><option>CORRECT</option><option>ERASE</option></select>
+          </div>
+          <div>
+            <label>Locale</label>
+            <input id="log-locale" placeholder="e.g. hi" />
+          </div>
+          <div>
+            <label>Limit</label>
+            <input id="log-limit" type="number" value="100" />
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="btn" id="log-refresh" style="width:100%">Search</button>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <div class="inline-actions">
+          <button class="btn-ghost btn" id="export-json">Export JSON</button>
+          <button class="btn-ghost btn" id="export-csv">Export CSV</button>
+        </div>
+        <div class="spacer"></div>
+        <table id="log-table"><thead><tr><th>Time</th><th>Action</th><th>Locale</th><th>Purposes</th><th>Minor</th><th>Artifact</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+
+    <!-- ── API keys ────────────────────────────────────────── -->
+    <section data-panel="keys" class="hidden">
+      <div class="card">
+        <h2>API keys</h2>
+        <p class="sub">Server-side keys authenticate consent submission. Keys are shown once; only a hash is stored. Signing keys live in KMS, never here.</p>
+        <form id="key-form" class="inline-actions" style="align-items:flex-end">
+          <div style="flex:1"><label>Label</label><input id="key-label" placeholder="production-backend" /></div>
+          <button class="btn" type="submit">Create key</button>
+        </form>
+        <div id="key-reveal"></div>
+        <div class="spacer"></div>
+        <table id="key-table"><thead><tr><th>Label</th><th>Prefix</th><th>Scope</th><th>Created</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+
+    <!-- ── Webhooks ────────────────────────────────────────── -->
+    <section data-panel="webhooks" class="hidden">
+      <div class="grid cols-2">
+        <div class="card">
+          <h2>Add endpoint</h2>
+          <p class="sub">Withdrawals fan out to your systems with an HMAC <code>CG-Signature</code> header. Failed deliveries retry with backoff, then land in the dead-letter queue.</p>
+          <form id="wh-form">
+            <label>URL</label>
+            <input id="wh-url" placeholder="https://api.yourapp.com/consent-hook" required />
+            <label>Events (comma-separated, blank = all)</label>
+            <input id="wh-events" placeholder="consent.withdrawn, consent.erased" />
+            <div class="spacer"></div>
+            <button class="btn" type="submit">Add endpoint</button>
+          </form>
+          <div id="wh-reveal"></div>
+        </div>
+        <div class="card">
+          <h2>Endpoints</h2>
+          <table id="wh-table"><thead><tr><th>URL</th><th>Events</th><th>Active</th></tr></thead><tbody></tbody></table>
+          <div class="spacer"></div>
+          <h3 style="font-size:14px;margin:0 0 8px">Dead-letter queue</h3>
+          <table id="dlq-table"><thead><tr><th>Event</th><th>Attempts</th><th>Last error</th><th>Created</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Integrity ───────────────────────────────────────── -->
+    <section data-panel="integrity" class="hidden">
+      <div class="card">
+        <h2>Chain integrity</h2>
+        <p class="sub">Recompute every content hash, verify each signature against its KMS key, and confirm the prev_hash chain is unbroken.</p>
+        <button class="btn" id="chain-verify">Verify full chain</button>
+        <div class="spacer"></div>
+        <div id="chain-result"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+  <script>CG.initDashboard();</script>
+</body>
+</html>

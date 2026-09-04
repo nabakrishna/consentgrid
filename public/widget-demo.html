@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ConsentGrid — Widget Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f6f7f9; color: #1a1a1a; }
+    header { background: #111; color: #fff; padding: 16px 24px; }
+    header h1 { margin: 0; font-size: 18px; }
+    main { max-width: 900px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: 1fr 420px; gap: 32px; }
+    @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+    .panel { background: #fff; border: 1px solid #e2e2e2; border-radius: 12px; padding: 20px; }
+    label { display: block; font-size: 13px; color: #444; margin: 10px 0 4px; }
+    input, select { width: 100%; padding: 8px 10px; border: 1px solid #cfcfcf; border-radius: 8px; font-size: 14px; box-sizing: border-box; }
+    .row { display: flex; gap: 10px; }
+    .row > div { flex: 1; }
+    button.go { margin-top: 16px; background: #111; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-size: 14px; cursor: pointer; }
+    pre { background: #0f1115; color: #b9f18d; padding: 12px; border-radius: 8px; font-size: 12px; overflow: auto; max-height: 260px; }
+    .hint { font-size: 12px; color: #777; }
+    .rtl-note { font-size: 12px; color: #8a5a00; background: #fff4e5; border: 1px solid #ffd9a0; border-radius: 6px; padding: 8px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <header><h1>ConsentGrid — Embeddable Widget Demo</h1></header>
+  <main>
+    <section class="panel">
+      <h2 style="margin-top:0;font-size:16px">Configuration</h2>
+      <p class="hint">Point this at a running ConsentGrid server. Create an org, approve a notice in at least one language, then paste the org_id.</p>
+      <label>API base</label>
+      <input id="apiBase" value="" placeholder="(same origin)" />
+      <label>Org ID</label>
+      <input id="orgId" placeholder="org uuid from POST /v1/orgs" />
+      <label>User token (opaque — never raw PII)</label>
+      <input id="userToken" value="demo-user-001" />
+      <label>API key (optional; usually a server proxy holds this)</label>
+      <input id="apiKey" placeholder="cg_live_…" />
+      <div class="row">
+        <div>
+          <label>Purpose IDs (comma-separated)</label>
+          <input id="purposes" value="marketing,analytics,personalization" />
+        </div>
+      </div>
+      <label>Force page &lt;html lang&gt; (reload to apply)</label>
+      <select id="htmlLang">
+        <option value="en">en</option>
+        <option value="hi">hi (हिन्दी)</option>
+        <option value="bn">bn (বাংলা)</option>
+        <option value="ta">ta (தமிழ்)</option>
+        <option value="ur">ur (اردو) — RTL</option>
+      </select>
+      <button class="go" id="launch">Launch widget</button>
+      <div class="rtl-note">RTL check: pick <b>ur</b> and approve an Urdu notice — the notice body and layout must render right-to-left.</div>
+      <h3 style="font-size:14px">Events</h3>
+      <pre id="log">(widget events appear here)</pre>
+    </section>
+    <section>
+      <div id="mount"></div>
+    </section>
+  </main>
+
+  <script type="module">
+    import ConsentGrid from '/widget/consentgrid.js';
+
+    // Register the offline-capture service worker (best-effort).
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/widget/sw.js').catch(() => {});
+    }
+
+    const logEl = document.getElementById('log');
+    const log = (o) => { logEl.textContent = JSON.stringify(o, null, 2) + '\n\n' + logEl.textContent; };
+
+    // apply forced html lang from the selector
+    const forced = new URLSearchParams(location.search).get('lang');
+    if (forced) document.documentElement.setAttribute('lang', forced);
+    document.getElementById('htmlLang').value = document.documentElement.getAttribute('lang') || 'en';
+    document.getElementById('htmlLang').addEventListener('change', (e) => {
+      const u = new URL(location.href); u.searchParams.set('lang', e.target.value); location.href = u.toString();
+    });
+
+    let controller = null;
+    document.getElementById('launch').addEventListener('click', () => {
+      if (controller) controller.destroy();
+      const purposes = document.getElementById('purposes').value.split(',').map((s) => s.trim()).filter(Boolean)
+        .map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }));
+      controller = ConsentGrid.init({
+        apiBase: document.getElementById('apiBase').value.trim(),
+        orgId: document.getElementById('orgId').value.trim(),
+        userToken: document.getElementById('userToken').value.trim(),
+        apiKey: document.getElementById('apiKey').value.trim() || null,
+        purposes,
+        mount: '#mount',
+        onEvent: log,
+      });
+    });
+  </script>
+</body>
+</html>
