@@ -1,0 +1,956 @@
+openapi: 3.1.0
+info:
+  title: ConsentGrid API
+  version: "1.0.0"
+  summary: Tamper-evident, multilingual, purpose-bound consent capture for India's DPDP Act 2023 / Rules 2025.
+  description: |
+    ConsentGrid mints **Consent Artifacts**: tamper-evident, KMS-signed, hash-chained
+    records of a single consent event (grant / withdraw / correct / erase).
+
+    ## Audiences & auth
+    - **Server-to-server (widget backend, your app):** send `Authorization: Bearer <api_key>`
+      (or `X-API-Key`). Used for `/v1/consent`, `/v1/erase`, `/v1/guardian/*`,
+      `/v1/consent/history`, `/v1/artifacts/*`.
+    - **Dashboard (session cookie `cg_session`):** notice authoring, API keys, webhooks,
+      consent log, exports, chain verification.
+    - **Public (no auth):** `/health`, `/v1/languages/resolve`, `/v1/notice`, and the
+      artifact verifier `/v1/verify/{id}`.
+
+    ## Invariants (see SECURITY.md)
+    - The API never accepts or stores raw email/phone. Send an **opaque `user_token`**;
+      the platform stores only a keyed `id_hash`.
+    - No pre-ticked consent: every `true` purpose must be backed by an explicit
+      interaction event.
+    - No silent language auto-selection: a `language_confirmed` interaction event is
+      required, and the resolved locale must have an **approved** notice (honest fallback).
+    - OTP / raw PII is never returned in a response.
+  license:
+    name: Proprietary
+  contact:
+    name: ConsentGrid
+    url: https://example.com/consentgrid
+
+servers:
+  - url: http://localhost:8080
+    description: Local dev
+  - url: https://api.consentgrid.example
+    description: Production (illustrative)
+
+tags:
+  - name: Health
+  - name: Auth & tenancy
+  - name: API keys
+  - name: Notices
+  - name: Language
+  - name: Guardian (minor flow)
+  - name: Consent
+  - name: Verification
+  - name: Dashboard
+  - name: Webhooks
+
+security:
+  - bearerApiKey: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  ts: { type: string, format: date-time }
+
+  /v1/orgs:
+    post:
+      tags: [Auth & tenancy]
+      summary: Sign up a new tenant (Data Fiduciary)
+      description: Creates an org, returns a one-time API key and a dashboard session token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  org_id: { type: string, format: uuid }
+                  api_key: { type: string, description: "Shown once. Store immediately.", example: "cg_live_..." }
+                  session: { type: string }
+                  note: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/sessions:
+    post:
+      tags: [Auth & tenancy]
+      summary: Log in (dashboard)
+      description: On success sets an HttpOnly `cg_session` cookie and returns the token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: OK
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: "cg_session=<token>; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  org_id: { type: string, format: uuid }
+                  session: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /v1/api-keys:
+    get:
+      tags: [API keys]
+      summary: List API keys
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/ApiKeySummary" }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [API keys]
+      summary: Create an API key (admin)
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string }
+      responses:
+        "201":
+          description: Created (key shown once)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key_id: { type: string, format: uuid }
+                  api_key: { type: string }
+                  note: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /v1/api-keys/{id}:
+    delete:
+      tags: [API keys]
+      summary: Revoke an API key (admin)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { revoked: { type: boolean } }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /v1/templates:
+    post:
+      tags: [Notices]
+      summary: Create a notice template (admin)
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, purposes]
+              properties:
+                name: { type: string }
+                purposes:
+                  type: array
+                  items: { type: string }
+                  example: ["marketing", "analytics"]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { template_id: { type: string, format: uuid } }
+        "400": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [Notices]
+      summary: List notice templates
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items: { $ref: "#/components/schemas/TemplateSummary" }
+
+  /v1/templates/{id}/versions:
+    get:
+      tags: [Notices]
+      summary: List versions of a template
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items: { $ref: "#/components/schemas/VersionSummary" }
+    post:
+      tags: [Notices]
+      summary: Create an immutable notice version (admin)
+      description: |
+        `template_boilerplate` is the fixed legal text; its SHA-256 becomes
+        `template_hash`. `variable_payload` holds runtime specifics and is hashed
+        into `variable_payload_hash`. Together they yield `notice_version_hash`,
+        which every artifact binds to.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [template_boilerplate]
+              properties:
+                template_boilerplate: { type: string }
+                variable_payload: { type: object, additionalProperties: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionCreated" }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /v1/versions/{vid}/locales:
+    get:
+      tags: [Notices]
+      summary: List locales for a version
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: vid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  locales:
+                    type: array
+                    items: { $ref: "#/components/schemas/LocaleSummary" }
+    post:
+      tags: [Notices]
+      summary: Add a localized notice body (admin)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: vid, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [locale, title, body_html]
+              properties:
+                locale: { type: string, example: "hi" }
+                title: { type: string }
+                body_html: { type: string }
+                direction: { type: string, enum: [ltr, rtl], description: "Auto-detected from locale if omitted." }
+                auto_translated: { type: boolean }
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added: { type: boolean }
+                  direction: { type: string, enum: [ltr, rtl] }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /v1/versions/{vid}/locales/{locale}/approve:
+    post:
+      tags: [Notices]
+      summary: Mark a localized notice legally approved (admin)
+      description: Only approved locales can back a minted artifact (honest fallback).
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: vid, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: locale, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { approved: { type: boolean } }
+
+  /v1/languages/resolve:
+    get:
+      tags: [Language]
+      summary: Resolve a 3–4 language shortlist for a visitor
+      description: |
+        Priority: host page `<html lang>` › stored preference › `navigator.languages`
+        ∩ approved › English (always included). **IP geolocation is never used.**
+        This is a suggestion only; the client must still capture one explicit
+        language confirmation before a notice counts as shown.
+      security: []
+      parameters:
+        - { name: org_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: html_lang, in: query, schema: { type: string }, example: "hi" }
+        - { name: stored, in: query, schema: { type: string } }
+        - { name: nav, in: query, description: "Comma-separated navigator.languages", schema: { type: string }, example: "hi-IN,en-US" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates:
+                    type: array
+                    items: { type: string }
+                    maxItems: 4
+                    example: ["hi", "en"]
+                  english_included: { type: boolean }
+                  approved_all:
+                    type: array
+                    items: { type: string }
+                  note: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /v1/notice:
+    get:
+      tags: [Notices]
+      summary: Fetch a single approved notice (public, edge-cacheable)
+      description: Returns 409 with `available:false` when the locale has no approved notice.
+      security: []
+      parameters:
+        - { name: org_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: locale, in: query, required: true, schema: { type: string } }
+        - { name: version_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Approved notice
+          headers:
+            ETag: { schema: { type: string } }
+            Cache-Control: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Notice" }
+        "409":
+          description: No approved notice in this locale (honest fallback)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available: { type: boolean, const: false }
+                  locale: { type: string }
+                  message: { type: string }
+
+  /v1/guardian/start:
+    post:
+      tags: [Guardian (minor flow)]
+      summary: Start guardian OTP verification
+      description: |
+        Sends an OTP out-of-band to the declared guardian phone. The OTP and the
+        raw phone are **never** returned. Only hashes are stored.
+        Liability boundary: this proves the flow executed, not that the number
+        belongs to a legal guardian (see LEGAL-OPEN-QUESTIONS.md).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_token, guardian_phone]
+              properties:
+                user_token: { type: string }
+                guardian_phone: { type: string, description: "Declared; hashed, never stored raw." }
+      responses:
+        "201":
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  guardian_verification_id: { type: string, format: uuid }
+                  expires_at: { type: string, format: date-time }
+                  delivery: { type: string, const: otp_sent }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /v1/guardian/verify:
+    post:
+      tags: [Guardian (minor flow)]
+      summary: Complete guardian verification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [guardian_verification_id, guardian_phone, otp]
+              properties:
+                guardian_verification_id: { type: string, format: uuid }
+                guardian_phone: { type: string }
+                otp: { type: string }
+      responses:
+        "200":
+          description: Verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verified: { type: boolean }
+                  already: { type: boolean }
+        "401":
+          description: Incorrect OTP
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "410":
+          description: OTP expired
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          description: Too many attempts
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /v1/consent:
+    post:
+      tags: [Consent]
+      summary: Record a consent event and mint a signed artifact
+      description: |
+        Enforces every legal guard before minting: no pre-ticked purposes,
+        explicit `language_confirmed`, approved notice for the locale, and (for
+        minors) a verified guardian. Returns the public artifact view — the keyed
+        `id_hash`, never the raw `user_token`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConsentRequest" }
+      responses:
+        "201":
+          description: Artifact minted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArtifactPublicView" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403":
+          description: Bot heuristics rejected the submission
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: No approved notice for the locale, or notice_version mismatch
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "410":
+          description: Identity has been erased (salt shredded)
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: Pre-ticked consent or missing language confirmation
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "428":
+          description: Minor consent requires guardian verification
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          description: Rate limited
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /v1/erase:
+    post:
+      tags: [Consent]
+      summary: Erase a Data Principal via crypto-shredding
+      description: |
+        Mints a terminal ERASE artifact, then destroys the per-user salt so the
+        historical `id_hash` becomes irreversible. Ledger rows and the hash-chain
+        remain intact and verifiable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_token]
+              properties:
+                user_token: { type: string }
+                reason: { type: string, example: "user_request" }
+      responses:
+        "200":
+          description: Erased
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  erased: { type: boolean }
+                  terminal_artifact_id: { type: string, format: uuid }
+                  note: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /v1/consent/history:
+    get:
+      tags: [Consent]
+      summary: A single Data Principal's own artifacts
+      description: Returns an empty list if the identity was erased.
+      parameters:
+        - { name: user_token, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifacts:
+                    type: array
+                    items: { $ref: "#/components/schemas/ArtifactPublicView" }
+                  note: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /v1/artifacts/{id}:
+    get:
+      tags: [Consent]
+      summary: Fetch one artifact (owning org)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArtifactPublicView" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/artifacts/{id}/verify:
+    get:
+      tags: [Verification]
+      summary: Cryptographically verify one artifact (owning org)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerifyResult" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/verify/{id}:
+    get:
+      tags: [Verification]
+      summary: Public artifact verification (no account)
+      description: Exposes only the proof surface — no purposes, no PII.
+      security: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Proof surface
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicVerification" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { found: { type: boolean, const: false } }
+
+  /v1/chain/verify:
+    get:
+      tags: [Dashboard]
+      summary: Verify the whole org ledger hash-chain
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Chain result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChainResult" }
+
+  /v1/consent-log:
+    get:
+      tags: [Dashboard]
+      summary: Paged consent log for the org
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 1000 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+        - { name: action, in: query, schema: { type: string, enum: [GRANT, WITHDRAW, CORRECT, ERASE] } }
+        - { name: locale, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifacts:
+                    type: array
+                    items: { $ref: "#/components/schemas/ArtifactPublicView" }
+
+  /v1/export:
+    get:
+      tags: [Dashboard]
+      summary: Export the consent log (CSV or JSON)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [json, csv], default: json } }
+      responses:
+        "200":
+          description: Export file
+          content:
+            text/csv:
+              schema: { type: string }
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schema: { type: string, example: "consentgrid.artifact-export.v1" }
+                  artifacts:
+                    type: array
+                    items: { $ref: "#/components/schemas/ArtifactPublicView" }
+
+  /v1/webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List webhook endpoints
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoints:
+                    type: array
+                    items: { $ref: "#/components/schemas/WebhookEndpoint" }
+    post:
+      tags: [Webhooks]
+      summary: Register a webhook endpoint (admin)
+      description: Returns a signing secret used to verify the `CG-Signature` header.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                events:
+                  type: array
+                  items: { type: string, enum: [consent.granted, consent.withdrawn, consent.corrected, consent.erased] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoint_id: { type: string, format: uuid }
+                  secret: { type: string, example: "whsec_..." }
+                  note: { type: string }
+
+  /v1/webhooks/dead-letters:
+    get:
+      tags: [Webhooks]
+      summary: List dead-lettered deliveries
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dead_letters:
+                    type: array
+                    items: { $ref: "#/components/schemas/DeadLetter" }
+
+components:
+  securitySchemes:
+    bearerApiKey:
+      type: http
+      scheme: bearer
+      description: "Authorization: Bearer <api_key>. Alternatively send X-API-Key."
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: cg_session
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string, description: "Stable machine-readable code", example: "pre_ticked_rejected" }
+        message: { type: string }
+      required: [error]
+
+    ApiKeySummary:
+      type: object
+      properties:
+        key_id: { type: string, format: uuid }
+        label: { type: string }
+        key_prefix: { type: string }
+        scope: { type: string }
+        revoked_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+
+    TemplateSummary:
+      type: object
+      properties:
+        template_id: { type: string, format: uuid }
+        name: { type: string }
+        purposes: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+
+    VersionSummary:
+      type: object
+      properties:
+        version_id: { type: string, format: uuid }
+        version_num: { type: integer }
+        template_hash: { type: string }
+        variable_payload_hash: { type: string }
+        notice_version_hash: { type: string }
+        locked: { type: integer, description: "1 once referenced by a live artifact" }
+        created_at: { type: string, format: date-time }
+
+    VersionCreated:
+      type: object
+      properties:
+        version_id: { type: string, format: uuid }
+        version_num: { type: integer }
+        notice_version_hash: { type: string }
+        template_hash: { type: string }
+        variable_payload_hash: { type: string }
+
+    LocaleSummary:
+      type: object
+      properties:
+        locale: { type: string }
+        title: { type: string }
+        direction: { type: string, enum: [ltr, rtl] }
+        legal_review_state: { type: string, enum: [draft, approved] }
+        auto_translated: { type: boolean }
+        approved_by: { type: [string, "null"] }
+        approved_at: { type: [string, "null"], format: date-time }
+
+    Notice:
+      type: object
+      properties:
+        available: { type: boolean, const: true }
+        org_id: { type: string, format: uuid }
+        locale: { type: string }
+        direction: { type: string, enum: [ltr, rtl] }
+        title: { type: string }
+        body_html: { type: string }
+        auto_translated: { type: boolean }
+        notice_version_hash: { type: string }
+        template_hash: { type: string }
+        variable_payload_hash: { type: string }
+        version_id: { type: string, format: uuid }
+
+    InteractionEvent:
+      type: object
+      description: Explicit proof of user action. No pre-ticking.
+      properties:
+        type: { type: string, enum: [toggle, click, tap, language_confirmed, erase_request] }
+        purpose_id: { type: string }
+        value: { type: boolean }
+        locale: { type: string }
+        ts: { type: integer, description: "epoch ms" }
+
+    ConsentRequest:
+      type: object
+      required: [user_token, action, locale]
+      properties:
+        user_token: { type: string, description: "Opaque. Never raw email/phone." }
+        action: { type: string, enum: [GRANT, WITHDRAW, CORRECT, ERASE] }
+        channel: { type: string, enum: [web, app, ivr, offline], default: web }
+        locale: { type: string, description: "The single language actually shown + confirmed." }
+        purposes:
+          type: object
+          additionalProperties: { type: boolean }
+          example: { marketing: true, analytics: false }
+        interaction_events:
+          type: array
+          items: { $ref: "#/components/schemas/InteractionEvent" }
+        notice_version_hash: { type: string }
+        template_hash: { type: string }
+        variable_payload_hash: { type: string }
+        is_minor: { type: boolean, default: false }
+        guardian_verification_id: { type: string, format: uuid }
+        migrated: { type: boolean, default: false }
+        pre_existing_consent_date: { type: [string, "null"], format: date-time }
+        expires_at: { type: [string, "null"], format: date-time }
+        notice_shown_to_submit_ms: { type: integer, description: "Anti-bot timing signal." }
+
+    ArtifactPublicView:
+      type: object
+      description: Signed artifact projection with proof fields; the keyed id_hash, never raw PII.
+      properties:
+        artifact_id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        action: { type: string, enum: [GRANT, WITHDRAW, CORRECT, ERASE] }
+        channel: { type: string }
+        purposes: { type: object, additionalProperties: { type: boolean } }
+        locale: { type: string }
+        notice_version_hash: { type: string }
+        is_minor: { type: boolean }
+        expires_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        content_hash: { type: string, description: "SHA-256 over the canonical body." }
+        key_id: { type: string }
+        algorithm: { type: string, const: ECDSA_SHA_256 }
+        signature: { type: string, description: "base64 DER ECDSA signature." }
+        id_hash: { type: string, description: "Keyed HMAC identifier — not reversible to PII." }
+
+    VerifyResult:
+      type: object
+      properties:
+        artifact_id: { type: string, format: uuid }
+        ok: { type: boolean }
+        content_hash_ok: { type: boolean }
+        signature_ok: { type: boolean }
+
+    PublicVerification:
+      type: object
+      properties:
+        found: { type: boolean, const: true }
+        artifact_id: { type: string, format: uuid }
+        signature_valid: { type: boolean }
+        content_hash_intact: { type: boolean }
+        notice_version_hash: { type: string }
+        locale: { type: string }
+        action: { type: string }
+        timestamp: { type: string, format: date-time }
+        key_id: { type: string }
+
+    ChainResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        count: { type: integer }
+        brokenAt: { type: [integer, "null"] }
+        reason: { type: [string, "null"] }
+
+    WebhookEndpoint:
+      type: object
+      properties:
+        endpoint_id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        events: { type: array, items: { type: string } }
+        active: { type: boolean }
+
+    DeadLetter:
+      type: object
+      properties:
+        delivery_id: { type: string, format: uuid }
+        event_type: { type: string }
+        attempts: { type: integer }
+        last_error: { type: string }
+        created_at: { type: string, format: date-time }
+
+  # ── Webhook payloads your endpoint receives (outbound) ──────────────────────
+  # Delivered with headers:
+  #   CG-Signature: t=<unix>,v1=<hex hmac-sha256 of "t.body">
+  # Verify with the endpoint secret (whsec_...). Reject if |now - t| is large (replay).
+  x-webhook-event:
+    type: object
+    properties:
+      id: { type: string }
+      type: { type: string, enum: [consent.granted, consent.withdrawn, consent.corrected, consent.erased] }
+      created_at: { type: string, format: date-time }
+      data:
+        type: object
+        properties:
+          action: { type: string, enum: [GRANT, REVOKE, WITHDRAW, ERASE] }
+          purpose_id: { type: string, description: "'*' for whole-subject withdraw/erase" }
+          user_token: { type: string, description: "Your own opaque token, echoed back so you can map it." }
+          artifact_id: { type: string, format: uuid }
+          occurred_at: { type: string, format: date-time }

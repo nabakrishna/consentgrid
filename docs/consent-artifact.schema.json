@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://consentgrid.example/schemas/consent-artifact.schema.json",
+  "title": "ConsentGrid Consent Artifact",
+  "description": "A tamper-evident, KMS-signed record of ONE consent event under India's DPDP Act 2023 / Rules 2025. The outer object is the signed envelope; `body` is the canonicalized, content-hashed, signed payload. Only fields inside `body` are covered by content_hash and signature.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["body", "content_hash", "key_id", "algorithm", "signature"],
+  "properties": {
+    "body": { "$ref": "#/$defs/ArtifactBody" },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 (hex) over the canonicalized body. Recompute to detect any edit to this record."
+    },
+    "key_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the KMS/HSM signing key used. Tagged per-artifact so key rotation never breaks historical verification."
+    },
+    "algorithm": {
+      "type": "string",
+      "const": "ECDSA_SHA_256",
+      "description": "Signature algorithm. ECDSA over the NIST P-256 curve with SHA-256."
+    },
+    "signature": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Base64-encoded DER ECDSA signature over the raw bytes of content_hash. Produced by KMS/HSM; the private key never leaves the boundary."
+    }
+  },
+  "$defs": {
+    "ArtifactBody": {
+      "type": "object",
+      "description": "The canonical, signable body. Nothing outside this object is part of the cryptographic proof.",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "artifact_id",
+        "org_id",
+        "id_hash",
+        "action",
+        "channel",
+        "purposes",
+        "interaction_events",
+        "locale",
+        "template_hash",
+        "variable_payload_hash",
+        "notice_version_hash",
+        "is_minor",
+        "guardian_verification",
+        "migrated",
+        "pre_existing_consent_date",
+        "expires_at",
+        "prev_hash",
+        "created_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "1.0.0",
+          "description": "Artifact schema version. Bump on any breaking change to the signable body."
+        },
+        "artifact_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique id for this single consent event."
+        },
+        "org_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The Data Fiduciary (tenant) that owns this artifact."
+        },
+        "id_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Keyed identifier = HMAC-SHA256(key = perUserSalt || SERVER_HMAC_PEPPER, msg = user_token). Never raw email/phone. Becomes irreversible once the per-user salt is crypto-shredded on erasure."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["GRANT", "WITHDRAW", "CORRECT", "ERASE"],
+          "description": "The consent event type. ERASE is terminal (salt is shredded afterward)."
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["web", "app", "ivr", "offline"],
+          "description": "Where the consent was captured."
+        },
+        "purposes": {
+          "type": "object",
+          "description": "Post-state of every purpose after this event: { purpose_id: boolean }. Each true value must be backed by an explicit interaction event (no pre-ticking).",
+          "additionalProperties": { "type": "boolean" }
+        },
+        "interaction_events": {
+          "type": "array",
+          "description": "Ordered, explicit proof of user action. Must include a `language_confirmed` event for affirmative actions, and a matching toggle/click/tap for every purpose set true.",
+          "items": { "$ref": "#/$defs/InteractionEvent" }
+        },
+        "locale": {
+          "type": "string",
+          "description": "The single language actually shown to and confirmed by the Data Principal (region-normalized, e.g. 'hi', 'en', 'ur').",
+          "examples": ["en", "hi", "bn", "ta", "ur"]
+        },
+        "template_hash": {
+          "type": "string",
+          "description": "SHA-256 of the immutable legal boilerplate of the notice version shown.",
+          "pattern": "^[0-9a-f]{0,64}$"
+        },
+        "variable_payload_hash": {
+          "type": "string",
+          "description": "SHA-256 of the runtime-injected specifics (e.g. retention period, purpose descriptions) of the notice shown.",
+          "pattern": "^[0-9a-f]{0,64}$"
+        },
+        "notice_version_hash": {
+          "type": "string",
+          "description": "Combined notice-version identifier binding template_hash + variable_payload_hash. Proves exactly which notice text the principal saw.",
+          "pattern": "^[0-9a-f]{0,64}$"
+        },
+        "is_minor": {
+          "type": "boolean",
+          "description": "Whether the Data Principal was declared a minor. If true, guardian_verification must be present."
+        },
+        "guardian_verification": {
+          "description": "Present only for minor consent. Proves the guardian OTP flow executed — NOT that the number belongs to a legal guardian. The Fiduciary retains strict liability (see LEGAL-OPEN-QUESTIONS.md).",
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/GuardianVerification" }
+          ]
+        },
+        "migrated": {
+          "type": "boolean",
+          "description": "True when this artifact records consent captured before onboarding to ConsentGrid (backfilled). Paired with pre_existing_consent_date."
+        },
+        "pre_existing_consent_date": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "For migrated=true records, the original date consent was obtained in the legacy system."
+        },
+        "expires_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Optional re-consent deadline. Null means no fixed expiry."
+        },
+        "prev_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "content_hash of the previous artifact in this org's partition, forming the tamper-evident hash-chain. The first artifact uses the genesis value (64 zeros)."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Event time (ISO 8601). This is part of the signed body; server-side receive/delivery timestamps are metadata and are NOT signed."
+        }
+      }
+    },
+    "InteractionEvent": {
+      "type": "object",
+      "description": "A single explicit user interaction. The presence and shape of these events is what proves consent was affirmative and not pre-ticked.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["toggle", "click", "tap", "language_confirmed", "erase_request"],
+          "description": "Kind of interaction. `language_confirmed` records the explicit language choice; `erase_request` is emitted by the erasure flow."
+        },
+        "purpose_id": {
+          "type": "string",
+          "description": "The purpose this interaction relates to (for toggle/click/tap)."
+        },
+        "value": {
+          "type": "boolean",
+          "description": "Resulting state of the purpose after this interaction."
+        },
+        "locale": {
+          "type": "string",
+          "description": "Locale confirmed (for language_confirmed events)."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Free-text reason (e.g. for erase_request)."
+        },
+        "ts": {
+          "type": "integer",
+          "description": "Client event time in epoch milliseconds."
+        }
+      },
+      "additionalProperties": true
+    },
+    "GuardianVerification": {
+      "type": "object",
+      "description": "Embedded proof that the guardian verification flow completed. Contains only hashes and a timestamp — never the raw guardian phone number.",
+      "additionalProperties": false,
+      "required": ["method", "ref_hash", "verified_at", "liability_note"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "description": "Verification method used.",
+          "examples": ["otp_sms"]
+        },
+        "ref_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of `${org_id}:${guardian_phone}` — a hash reference only, never the raw phone."
+        },
+        "verified_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the guardian OTP was successfully verified."
+        },
+        "liability_note": {
+          "type": "string",
+          "const": "flow-executed-not-identity-verified",
+          "description": "Explicit marker that this proves the flow ran, not that the number belongs to a legal guardian. The Data Fiduciary retains strict liability."
+        }
+      }
+    }
+  }
+}
