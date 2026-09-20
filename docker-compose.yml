@@ -1,0 +1,80 @@
+# docker-compose.yml — ConsentGrid local stack
+# ─────────────────────────────────────────────────────────────────────────
+# Primary use: bring up Postgres for the production-shaped path. You run the
+# Node app on your host (you already have Node ≥ 22.5):
+#
+#   docker compose up -d db
+#   export DATABASE_URL=postgres://consentgrid:consentgrid@localhost:5432/consentgrid
+#   npm i pg                      # the postgres adapter's only extra dependency
+#   npm run migrate && npm run seed
+#   npm start
+#
+# Optional extras (opt in with profiles):
+#   docker compose --profile tools up -d adminer   # DB UI at http://localhost:8081
+#   docker compose --profile app   up -d app       # run the whole app in a container
+#
+# The default `docker compose up -d` starts only Postgres.
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: consentgrid-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: consentgrid
+      POSTGRES_PASSWORD: consentgrid
+      POSTGRES_DB: consentgrid
+      # Keeps the demo self-contained; override for anything real.
+    ports:
+      - "5432:5432"
+    volumes:
+      - consentgrid-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U consentgrid -d consentgrid"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional lightweight DB UI — `--profile tools`
+  adminer:
+    image: adminer:4
+    container_name: consentgrid-adminer
+    restart: unless-stopped
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+
+  # Optional: run the whole app in a container — `--profile app`
+  app:
+    build: .
+    container_name: consentgrid-app
+    restart: unless-stopped
+    profiles: ["app"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://consentgrid:consentgrid@db:5432/consentgrid
+      PORT: "8080"
+      PUBLIC_BASE_URL: http://localhost:8080
+      # DEV KMS ONLY. In production set KMS_PROVIDER=aws + KMS_SIGNING_KEY_ARN,
+      # and NEVER mount signing keys into the container (see SECURITY.md).
+      KMS_PROVIDER: local
+      KMS_LOCAL_DIR: /data/keys
+      SERVER_HMAC_PEPPER: dev-pepper-change-me
+      SESSION_SECRET: dev-session-secret-change-me
+      WEBHOOK_SIGNING_SECRET: dev-webhook-secret-change-me
+      NODE_ENV: development
+    command: ["sh", "-c", "npm run migrate && npm run seed && npm start"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - consentgrid-keys:/data/keys
+
+volumes:
+  consentgrid-pgdata:
+  consentgrid-keys:
