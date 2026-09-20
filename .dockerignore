@@ -1,0 +1,13 @@
+# Keep the image clean and — importantly — never copy dev signing keys or local
+# databases into it. Signing keys must come from KMS/a mounted volume, never the
+# image layers (see SECURITY.md).
+node_modules
+data
+*.db
+*.db-*
+.env
+.git
+.gitignore
+npm-debug.log
+coverage
+widget/dist
