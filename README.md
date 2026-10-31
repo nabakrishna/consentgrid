@@ -83,43 +83,7 @@ No `npm install` is required for the fastest path below — the core app has zer
 
 ---
 
-## Option A — Fastest path: SQLite, zero setup (recommended for a first run)
-
-```bash
-git clone <this-repo>
-cd consentgrid
-npm run migrate
-# 2. Seed a demo org, API key, an approved notice (EN + HI), sample consents, a webhook
-npm run seed
-# 3. Start the app
-npm start
-```
-`npm run seed` prints demo credentials once — copy them, they are not shown again:
-
-```
-Dashboard URL    http://localhost:8080/
-Login email      demo@consentgrid.local
-Login password   demo-password-123
-API key          cg_live_...
-Org id           ...
-Webhook secret   whsec_...
-Sample artifacts <id>, <id>, <id>
-```
-
-Then open:
-- **`http://localhost:8080/`** — landing/login
-- **`http://localhost:8080/dashboard`** — org dashboard (consent log, templates, integrity check, API keys, webhooks)
-- **`http://localhost:8080/verify`** — public artifact verifier; paste one of the sample artifact IDs to see signature/chain verification with no PII exposed
-- **`http://localhost:8080/widget-demo.html`** — the embeddable widget running against the live API
-- **`http://localhost:8080/health`** — liveness check
-
-In a second terminal, run the webhook worker to see delivery + the dead-letter queue in action (the seeded webhook endpoint intentionally points at `example.com`, so you'll see it retry with backoff and land in the DLQ — this is expected and demonstrates the failure path):
-
-```bash
-npm run worker
-```
-
-## Option B — Real Postgres (production-shaped path)
+## Option A — Real Postgres (production-shaped path)
 
 ```bash
 docker compose up -d db
@@ -200,3 +164,15 @@ migrations/   SQL schema (SQLite + Postgres variants)
 ## Before this touches real user data
 
 Read `LEGAL-OPEN-QUESTIONS.md` and get actual counsel sign-off on the three open questions there. Engineering has implemented defensible technical answers to each, but none of them are legal conclusions.
+
+## License and permissions
+
+This project is **All rights reserved**. No permission is granted to copy,
+modify, redistribute, or otherwise use its original code, documentation, or
+designs without prior written permission from the copyright holder. See
+[LICENSE](LICENSE) for details. GitHub's Terms of Service still govern
+viewing and interacting with this public repository.
+
+Copyright protects original expression, such as code and documentation; it
+does not by itself give exclusive rights to an abstract idea, method, or
+concept. Third-party components remain subject to their own licenses.
