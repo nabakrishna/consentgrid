@@ -1,8 +1,80 @@
 # ConsentGrid
 
-A tamper-evident, multilingual, purpose-bound consent capture platform for India's DPDP Act, 2023 and DPDP Rules, 2025. This README covers how to run the vertical slice locally. For what it does and why, see the build specification; for security posture and open legal questions, see `SECURITY.md` and `LEGAL-OPEN-QUESTIONS.md`.
+ConsentGrid is a local-first consent platform for capturing and verifying consent records in a simple, tamper-evident way. It supports multilingual consent notices, signed consent artifacts, and local webhook workflows for testing.
 
-## Requirements
+## Local setup
+
+Requirements:
+
+- Node.js 22.5.0 or newer
+- SQLite works out of the box for local development
+
+Run this in the project folder:
+
+```bash
+git clone <repo-url>
+cd consentgrid
+npm run migrate
+npm run seed
+npm start
+```
+
+This creates the local database in `./data/consentgrid.db`, seeds demo data, and starts the app.
+
+Open these URLs in the browser:
+
+- `http://localhost:8080/`
+- `http://localhost:8080/dashboard`
+- `http://localhost:8080/verify`
+- `http://localhost:8080/widget-demo.html`
+- `http://localhost:8080/health`
+
+After `npm run seed`, the app prints the demo login details and API credentials. Save them from the terminal.
+
+```bash
+Dashboard URL    http://localhost:8080/
+Login email      demo@consentgrid.local
+Login password   demo-password-123
+API key          cg_live_...
+Org id           ...
+Webhook secret   whsec_...
+Sample artifacts <id>, <id>, <id>
+```
+
+## Run the webhook worker
+
+Open a second terminal and run:
+
+```bash
+npm run worker
+```
+
+This helps test the webhook retry and failure flow.
+
+## Useful commands
+
+```bash
+npm test
+npm run test:coverage
+npm run build:widget
+npm run cost-model
+```
+
+## Project structure
+
+```text
+src/         app logic, routes, crypto, DB, and webhook workers
+public/      dashboard, landing pages, verifier, and demo UI
+widget/      embeddable consent widget
+migrations/  SQL schema
+tests/       automated tests
+docs/        API and schema docs
+scripts/     helper scripts
+```
+
+## Notes
+
+The default local configuration uses SQLite. Please read `SECURITY.md` and `LEGAL-OPEN-QUESTIONS.md` before using this with real user data.
 
 - Node.js ≥ 22.5.0 (uses the built-in `node:sqlite` and `node:test`)
 - Docker + Docker Compose, **only** if you want to run against real Postgres instead of the built-in SQLite adapter
@@ -16,17 +88,12 @@ No `npm install` is required for the fastest path below — the core app has zer
 ```bash
 git clone <this-repo>
 cd consentgrid
-
-# 1. Apply the schema (creates ./data/consentgrid.db)
 npm run migrate
-
 # 2. Seed a demo org, API key, an approved notice (EN + HI), sample consents, a webhook
 npm run seed
-
 # 3. Start the app
 npm start
 ```
-
 `npm run seed` prints demo credentials once — copy them, they are not shown again:
 
 ```
